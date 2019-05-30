@@ -527,6 +527,159 @@ static WRITE_TRAN ossl_statem_server13_write_transition(SSL *s)
 }
 
 /*
+OSSL_HANDSHAKE_STATE: openssl有限状态机
+起始状态 -> 终止状态
+TLS_ST_BEFORE -> TLS_ST_OK
+
+TLS13服务器状态机变迁图:
+							  
+							  
+		  
+									   START <-----+
+						           收消息|		   | Send HelloRetryRequest,让客户端重试，没收到必须的信息
+										 v		   |
+							   收到ClientHello ----+
+										 | 选择参数
+										 v
+							    非对称密钥协商开始
+										 | 发送ServerHello
+										 | 
+										 | 握手扩展字段EncryptedExtensions
+										 | [发送CertificateRequest]
+		        						 | [发送Certificate + CertificateVerify]
+       之后可以发送 					 | 发送Finished
+	   应用层信息  -->					 | 
+		        				+--------+--------+
+					      1-RTT |				  | 0-RTT
+								|				  |
+			K_recv = handshake	|				  | K_recv = early data
+		  [Skip decrypt errors] |	 +------> 等待结束  -+
+								|	 |		 收到 | 	 | 收到EndOfEarlyData
+								|	 | early data | 	 | K_recv = handshake
+								|	 +------------+ 	 |
+								|						 |
+								+> ------------ <--------+
+										 |
+								+--------+--------+
+						No auth |				  | Client auth
+								|				  |
+								|				  v
+								|			  WAIT_CERT
+								|		 Recv | 	  | Recv Certificate
+								|		empty | 	  v
+								| Certificate |    WAIT_CV
+								|			  | 	  | Recv
+								|			  v 	  | CertificateVerify
+								+-> ------------- <---+
+										 |
+										 |
+										 v
+									 SSL握手成功
+
+
+		  
+							   TLS_ST_BEFORE <-----+
+						                 |		   | Send HelloRetryRequest
+										 v		   |
+						  TLS_ST_SR_CLNT_HELLO ----+
+										 | Select parameters
+										 v
+							  TLS_ST_SW_SRVR_HELLO
+										 | 
+										 | 
+										 | 
+										 | [TLS_ST_SW_CERT]//看是什么非对称算法，如果是PSK或者SRP有这个步骤，DH选择后者
+		        						 | TLS_ST_SW_KEY_EXCH
+		  	                			 | [TLS_ST_SW_CERT_REQ，TLS_ST_SW_SRVR_DONE]
+		  	                    		 |       TLS_ST_SR_KEY_EXCH
+		                                 |       TLS_ST_SR_CHANGE
+		                                 |       [TLS_ST_SR_CERT_VRFY]
+		                                 |       TLS_ST_SR_FINISHED
+		                                 | TLS_ST_SW_CHANGE
+		                                 | TLS_ST_SW_FINISHED
+		                                 |    TLS_ST_OK
+		                                 | 
+		                                 | 
+			应用层信息   -->			 | 
+			之后可以发送				 | 
+		            			+--------+--------+
+					      1-RTT |				  | 0-RTT
+								|				  |
+			K_recv = handshake	|				  | K_recv = early data
+		  [Skip decrypt errors] |	 +------> WAIT_EOED -+
+								|	 |		 Recv | 	 | Recv EndOfEarlyData
+								|	 | early data | 	 | K_recv = handshake
+								|	 +------------+ 	 |
+								|						 |
+								+> WAIT_FLIGHT2 <--------+
+										 |
+								+--------+--------+
+						No auth |				  | Client auth
+								|				  |
+								|				  v
+								|			  WAIT_CERT
+								|		 Recv | 	  | Recv Certificate
+								|		empty | 	  v
+								| Certificate |    WAIT_CV
+								|			  | 	  | Recv
+								|			  v 	  | CertificateVerify
+								+-> WAIT_FINISHED <---+
+										 | Recv Finished
+										 | K_recv = application
+										 v
+									 CONNECTED
+
+
+
+
+
+
+                              START <-----+
+               Recv ClientHello |         | Send HelloRetryRequest
+                                v         |
+                             RECVD_CH ----+
+                                | Select parameters
+                                v
+                             NEGOTIATED
+                                | Send ServerHello
+                                | K_send = handshake
+                                | Send EncryptedExtensions
+                                | [Send CertificateRequest]
+ Can send                       | [Send Certificate + CertificateVerify]
+ app data                       | Send Finished
+ after   -->                    | K_send = application
+ here                  +--------+--------+
+              No 0-RTT |                 | 0-RTT
+                       |                 |
+   K_recv = handshake  |                 | K_recv = early data
+ [Skip decrypt errors] |    +------> WAIT_EOED -+
+                       |    |       Recv |      | Recv EndOfEarlyData
+                       |    | early data |      | K_recv = handshake
+                       |    +------------+      |
+                       |                        |
+                       +> WAIT_FLIGHT2 <--------+
+                                |
+                       +--------+--------+
+               No auth |                 | Client auth
+                       |                 |
+                       |                 v
+                       |             WAIT_CERT
+                       |        Recv |       | Recv Certificate
+                       |       empty |       v
+                       | Certificate |    WAIT_CV
+                       |             |       | Recv
+                       |             v       | CertificateVerify
+                       +-> WAIT_FINISHED <---+
+                                | Recv Finished
+                                | K_recv = application
+                                v
+                            CONNECTED
+
+
+
+*/
+
+/*
  * ossl_statem_server_write_transition() works out what handshake state to move
  * to next when the server is writing messages to be sent to the client.
  */
